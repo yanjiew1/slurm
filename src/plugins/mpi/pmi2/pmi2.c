@@ -105,8 +105,7 @@ static struct {
 static int
 _handle_fullinit(int fd, int lrank, client_req_t *req)
 {
-	int pmi_jobid, pmi_rank;
-	bool threaded;
+	int pmi_rank;
 	int found, rc = PMI2_SUCCESS;
 	client_resp_t *resp;
 
@@ -114,21 +113,9 @@ _handle_fullinit(int fd, int lrank, client_req_t *req)
 
 	client_req_parse_body(req);
 
-	found = client_req_get_int(req, PMIJOBID_KEY, &pmi_jobid);
-	if (! found) {
-		error(PMIJOBID_KEY" missing in fullinit command");
-		rc = PMI2_ERR_INVALID_ARG;
-		goto response;
-	}
 	found = client_req_get_int(req, PMIRANK_KEY, &pmi_rank);
 	if (! found) {
 		error(PMIRANK_KEY" missing in fullinit command");
-		rc = PMI2_ERR_INVALID_ARG;
-		goto response;
-	}
-	found = client_req_get_bool(req, THREADED_KEY, &threaded);
-	if (! found) {
-		error(THREADED_KEY" missing in fullinit command");
 		rc = PMI2_ERR_INVALID_ARG;
 		goto response;
 	}
