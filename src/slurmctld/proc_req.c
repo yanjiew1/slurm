@@ -63,6 +63,7 @@
 #include "src/common/id_util.h"
 #include "src/common/log.h"
 #include "src/common/macros.h"
+#include "src/common/net.h"
 #include "src/common/node_features.h"
 #include "src/common/pack.h"
 #include "src/common/persist_conn.h"
@@ -5932,7 +5933,17 @@ static void _slurm_rpc_persist_init(slurm_msg_t *msg)
 	if (persist_init->persist_type == PERSIST_TYPE_FED)
 		rc = fed_mgr_add_sibling_conn(persist_conn, &comment);
 	else if (persist_init->persist_type == PERSIST_TYPE_ACCT_UPDATE) {
+		const int fd = conn_g_get_fd(persist_conn->conn);
+
 		persist_conn->flags |= PERSIST_FLAG_ALREADY_INITED;
+
+		/* Persistent connection handlers expect file descriptor to be
+		 * already configured as nonblocking with keepalive activated
+		 */
+		xassert(fd >= 0);
+		fd_set_nonblocking(fd);
+		net_set_keep_alive(fd);
+
 		slurm_persist_conn_recv_thread_init(
 			persist_conn, conn_g_get_fd(persist_conn->conn), -1,
 			persist_conn);
@@ -6854,10 +6865,43 @@ extern slurmctld_rpc_t *find_rpc(uint16_t msg_type)
 	return NULL;
 }
 
+/* Return 1 when writeable and readable or 0 on error */
+static bool _fd_is_stale(int fd)
+{
+	bool stale = false;
+	char temp[2];
+	int flags = 0;
+	bool nonblocking = true;
+
+#ifdef MSG_DONTWAIT
+	flags |= MSG_DONTWAIT;
+
+	if (!(nonblocking = fd_is_nonblocking(fd)))
+		fd_set_nonblocking(fd);
+#endif
+
+	if (send(fd, NULL, 0, flags)) {
+		log_flag(NET, "%s: [fd:%d] stale socket is not writable",
+		       __func__, fd);
+		stale = true;
+	} else if (recv(fd, &temp, 1, MSG_PEEK)) {
+		log_flag(NET, "%s: [fd:%d] stale socket is not readable",
+		       __func__, fd);
+		stale = true;
+	} else {
+		log_flag(NET, "%s: [fd:%d] socket is not stale", __func__, fd);
+	}
+
+	if (!nonblocking)
+		fd_set_blocking(fd);
+
+	return stale;
+}
+
 static bool _is_connection_stale(slurm_msg_t *msg, slurmctld_rpc_t *this_rpc,
 				 int fd)
 {
-	if ((fd >= 0) && !fd_is_writable(fd)) {
+	if ((fd >= 0) && !_fd_is_stale(fd)) {
 		error("%s: [fd:%d] Connection is stale, discarding RPC %s from uid:%u",
 		      __func__, fd, rpc_num2string(msg->msg_type),
 		      msg->auth_uid);
